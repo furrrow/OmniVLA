@@ -82,17 +82,63 @@ def init_module(
 # Inference Class
 # ===============================================================
 class Inference:
-    def __init__(self, save_dir, lan_inst_prompt, goal_utm, goal_compass, goal_image_PIL, action_tokenizer, processor):
+    def __init__(self, save_dir, ego_frame_mode, vla_config,save_images=False, radians=False):
         self.tick_rate = 3
-        self.lan_inst_prompt = lan_inst_prompt
-        self.goal_utm = goal_utm
-        self.goal_compass = goal_compass
-        self.goal_image_PIL = goal_image_PIL
-        self.action_tokenizer = action_tokenizer
-        self.processor = processor
+        self.vla = None
+        self.action_head = None
+        self.pose_projector = None
+        self.device_id = None
+        self.NUM_PATCHES = None
+        self.modality = None
+        self.vla_config = vla_config
+
+        self.init_vla()
         self.count_id = 0
         self.linear, self.angular = 0.0, 0.0
         self.datastore_path_image = save_dir
+        self.ego_frame_mode = ego_frame_mode
+        self.lan_inst = None
+
+        self.current_image = None
+        self.current_utm = None     # (X, Y) if ego_frame_mode
+        self.current_compass = None
+
+        self.lan_inst_prompt = None
+        self.goal_image = None
+        self.goal_utm = None    # (X, Y) if ego_frame_mode
+        self.goal_compass = None
+
+        self.goal_pose_loc_norm = None
+
+        self.thres_dist = 30.0
+        self.metric_waypoint_spacing = 0.38 # meter per waypoint unit for SCAND
+
+        self.pose_goal = self.modality["pose_goal"]
+        self.satellite = self.modality["satellite"]
+        self.image_goal = self.modality["image_goal"]
+        self.lan_prompt = self.modality["lan_prompt"]
+
+        self.waypoints = None
+        self.save_images = save_images
+        self.radians = radians
+
+    def init_vla(self):
+
+        if self.vla_config is None:
+            cfg = InferenceConfig()
+        else:
+            cfg = self.vla_config
+            
+        self.vla, self.action_head, self.pose_projector, self.device_id, self.NUM_PATCHES, self.action_tokenizer, self.processor = define_model(cfg)
+
+        # select modality
+        self.modality = {
+            "pose_goal": True,
+            "satellite": False,
+            "image_goal": False,
+            "lan_prompt": False
+        }
+
     # ----------------------------
     # Static Utility Methods
     # ----------------------------
@@ -106,93 +152,61 @@ class Inference:
         rel_y = -delta_x * math.sin(heading_a_rad) + delta_y * math.cos(heading_a_rad)
         return rel_x, rel_y
 
-    # ----------------------------
-    # Main Loop
-    # ----------------------------
-    def run(self):
-        loop_time = 1 / self.tick_rate
-        start_time = time.time()
-        while True:
-            if time.time() - start_time > loop_time:
-                self.tick()
-                start_time = time.time()
-                break
+    def update_goal(self, goal_image_PIL, goal_utm, goal_compass, lan_inst_prompt):
+        self.goal_utm = goal_utm
+        self.goal_compass = goal_compass
+        self.goal_image_PIL = goal_image_PIL
+        self.lan_inst_prompt = lan_inst_prompt
 
-    def tick(self):
-        self.linear, self.angular = self.run_omnivla()
+    def update_current_state(self, current_image, current_utm, current_compass):
+        self.current_image_PIL = current_image
+        self.current_utm = current_utm
+        self.current_compass = current_compass
 
-    # ----------------------------
-    # OmniVLA Inference
-    # ----------------------------
-    def run_omnivla(self):
-        thres_dist = 30.0
-        metric_waypoint_spacing = 0.1               #for scand this is 0.38
+    def preprocess_inputs(self):
+        self.preprocess_utm_goal()
+        self.preprocess_images()
+        self.preprocess_lang_goal()
 
-        # Load current GPS & heading
-        current_lat = 37.87371258374039
-        current_lon = -122.26729417226024
-        current_compass = 270.0
-        cur_utm = utm.from_latlon(current_lat, current_lon)
-        cur_compass = -float(current_compass) / 180.0 * math.pi  # inverted compass
+    def preprocess_utm_goal(self):
+        if not self.ego_frame_mode:
+            self.goal_utm = utm.from_latlon(self.goal_utm[0], self.goal_utm[1])
+            self.current_utm = utm.from_latlon(self.current_utm[0], self.current_utm[1])
 
-        # Local goal position
+        if not self.radians:
+            self.goal_compass = -float(self.goal_compass) / 180.0 * math.pi
+            self.current_compass = -float(self.current_compass) / 180.0 * math.pi
+
         delta_x, delta_y = self.calculate_relative_position(
-            cur_utm[0], cur_utm[1], self.goal_utm[0], self.goal_utm[1]
+            self.current_utm[0], self.current_utm[1], self.goal_utm[0], self.goal_utm[1]
         )
-        relative_x, relative_y = self.rotate_to_local_frame(delta_x, delta_y, cur_compass)
+        relative_x, relative_y = self.rotate_to_local_frame(delta_x, delta_y, self.current_compass)
+
         radius = np.sqrt(relative_x**2 + relative_y**2)
-        if radius > thres_dist:
-            relative_x *= thres_dist / radius
-            relative_y *= thres_dist / radius
+        if radius > self.thres_dist:
+            relative_x *= self.thres_dist / radius
+            relative_y *= self.thres_dist / radius
 
         goal_pose_loc_norm = np.array([
-            relative_y / metric_waypoint_spacing,
-            -relative_x / metric_waypoint_spacing,
-            np.cos(self.goal_compass - cur_compass),
-            np.sin(self.goal_compass - cur_compass)
+            relative_y / self.metric_waypoint_spacing,
+            -relative_x / self.metric_waypoint_spacing,
+            np.cos(self.goal_compass - self.current_compass),
+            np.sin(self.goal_compass - self.current_compass)
         ])
 
-        # Load current image
-        current_image_path = "./inference/current_img.jpg"
-        current_image_PIL = Image.open(current_image_path).convert("RGB")
+        self.goal_pose_loc_norm = goal_pose_loc_norm
 
-        # Language instruction
-        lan_inst = self.lan_inst_prompt if lan_prompt else "xxxx"
+    def preprocess_images(self):
+        pass
 
-        # Prepare batch
-        batch = self.data_transformer_omnivla(
-            current_image_PIL, lan_inst, self.goal_image_PIL, goal_pose_loc_norm,
-            prompt_builder=PurePromptBuilder,
-            action_tokenizer=self.action_tokenizer,
-            processor=self.processor
-        )
+    def preprocess_lang_goal(self):
+        self.lan_inst = self.lan_inst_prompt if self.lan_prompt else "xxxx"
 
-        # Run forward pass
-        actions, modality_id = self.run_forward_pass(
-            vla=vla.eval(),
-            action_head=action_head.eval(),
-            noisy_action_projector=None,
-            pose_projector=pose_projector.eval(),
-            batch=batch,
-            action_tokenizer=self.action_tokenizer,
-            device_id=device_id,
-            use_l1_regression=True,
-            use_diffusion=False,
-            use_film=False,
-            num_patches=NUM_PATCHES,
-            compute_diffusion_l1=False,
-            num_diffusion_steps_train=None,
-            mode="train",
-            idrun=self.count_id,
-        )
-        self.count_id += 1
-
-        waypoints = actions.float().cpu().numpy()
-
+    def robot_control(self):
         # Select waypoint
         waypoint_select = 4
-        chosen_waypoint = waypoints[0][waypoint_select].copy()
-        chosen_waypoint[:2] *= metric_waypoint_spacing
+        chosen_waypoint = self.waypoints[0][waypoint_select].copy()
+        chosen_waypoint[:2] *= self.metric_waypoint_spacing
         dx, dy, hx, hy = chosen_waypoint
 
         # PD controller
@@ -234,14 +248,71 @@ class Inference:
                     linear_vel_value_limit = maxw * np.sign(linear_vel_value) * np.abs(rd)
                     angular_vel_value_limit = maxw * np.sign(angular_vel_value)
 
-        # Save behavior
-        self.save_robot_behavior(
-            current_image_PIL, self.goal_image_PIL, goal_pose_loc_norm, waypoints[0],
-            linear_vel_value_limit, angular_vel_value_limit, metric_waypoint_spacing, modality_id.cpu().numpy()
+        return linear_vel_value_limit, angular_vel_value_limit
+    
+    # ----------------------------
+    # Main Loop
+    # ----------------------------
+    def run(self):
+        loop_time = 1 / self.tick_rate
+        start_time = time.time()
+        while True:
+            if time.time() - start_time > loop_time:
+                self.tick()
+                start_time = time.time()
+                break
+
+    def tick(self):
+        self.waypoints = self.run_omnivla()
+
+    # ----------------------------
+    # OmniVLA Inference
+    # ----------------------------
+    def run_omnivla(self):
+        
+        self.preprocess_inputs()
+
+        # Prepare batch
+        batch = self.data_transformer_omnivla(
+            self.current_image_PIL, self.lan_inst, self.goal_image_PIL, self.goal_pose_loc_norm,
+            prompt_builder=PurePromptBuilder,
+            action_tokenizer=self.action_tokenizer,
+            processor=self.processor
         )
 
-        print("linear angular", linear_vel_value_limit, angular_vel_value_limit)
-        return linear_vel_value_limit, angular_vel_value_limit
+        # Run forward pass
+        actions, modality_id = self.run_forward_pass(
+            vla=self.vla.eval(),
+            action_head=self.action_head.eval(),
+            noisy_action_projector=None,
+            pose_projector=self.pose_projector.eval(),
+            batch=batch,
+            action_tokenizer=self.action_tokenizer,
+            device_id=self.device_id,
+            use_l1_regression=True,
+            use_diffusion=False,
+            use_film=False,
+            num_patches=self.NUM_PATCHES,
+            compute_diffusion_l1=False,
+            num_diffusion_steps_train=None,
+            mode="train",
+            idrun=self.count_id,
+        )
+        self.count_id += 1
+
+        self.waypoints = actions.float().cpu().numpy()
+        # linear_vel_value_limit, angular_vel_value_limit = self.robot_control()
+        # # Save behavior
+
+        # if self.save_images:
+        #     self.save_robot_behavior(
+        #         self.current_image_PIL, self.goal_image_PIL, self.goal_pose_loc_norm, self.waypoints[0],
+        #         linear_vel_value_limit, angular_vel_value_limit, self.metric_waypoint_spacing, modality_id.cpu().numpy()
+        #     )
+
+        # print("linear angular", linear_vel_value_limit, angular_vel_value_limit)
+        # print(self.waypoints)
+        return self.waypoints
 
     # ----------------------------
     # Save Robot Behavior Visualization
@@ -364,8 +435,8 @@ class Inference:
         if not predict_stop_token:
             labels[-1] = IGNORE_INDEX
 
-        pixel_values_current = image_transform(current_image_PIL)
-        pixel_values_goal = image_transform(goal_image_PIL)
+        pixel_values_current = image_transform(current_image_PIL)       #This is the processed current image
+        pixel_values_goal = image_transform(goal_image_PIL)        #This is the processed goal image
         dataset_name = "lelan"
 
         return dict(
@@ -417,23 +488,23 @@ class Inference:
         noise, noisy_actions, diffusion_timestep_embeddings = None, None, None
 
         # Determine modality
-        if satellite and not lan_prompt and not pose_goal and not image_goal:
+        if self.satellite and not self.lan_prompt and not self.pose_goal and not self.image_goal:
             modality_id = torch.as_tensor([0], dtype=torch.float32)
-        elif satellite and not lan_prompt and pose_goal and not image_goal:
+        elif self.satellite and not self.lan_prompt and self.pose_goal and not self.image_goal:
             modality_id = torch.as_tensor([1], dtype=torch.float32)
-        elif satellite and not lan_prompt and not pose_goal and image_goal:
+        elif self.satellite and not self.lan_prompt and not self.pose_goal and self.image_goal:
             modality_id = torch.as_tensor([2], dtype=torch.float32)
-        elif satellite and not lan_prompt and pose_goal and image_goal:
+        elif self.satellite and not self.lan_prompt and self.pose_goal and self.image_goal:
             modality_id = torch.as_tensor([3], dtype=torch.float32)
-        elif not satellite and not lan_prompt and pose_goal and not image_goal:
+        elif not self.satellite and not self.lan_prompt and self.pose_goal and not self.image_goal:
             modality_id = torch.as_tensor([4], dtype=torch.float32)
-        elif not satellite and not lan_prompt and pose_goal and image_goal:
+        elif not self.satellite and not self.lan_prompt and self.pose_goal and self.image_goal:
             modality_id = torch.as_tensor([5], dtype=torch.float32)
-        elif not satellite and not lan_prompt and not pose_goal and image_goal:
+        elif not self.satellite and not self.lan_prompt and not self.pose_goal and self.image_goal:
             modality_id = torch.as_tensor([6], dtype=torch.float32)
-        elif not satellite and lan_prompt and not pose_goal and not image_goal:
+        elif not self.satellite and self.lan_prompt and not self.pose_goal and not self.image_goal:
             modality_id = torch.as_tensor([7], dtype=torch.float32)
-        elif not satellite and lan_prompt and pose_goal and not image_goal:
+        elif not self.satellite and self.lan_prompt and self.pose_goal and not self.image_goal:
             modality_id = torch.as_tensor([8], dtype=torch.float32)
 
         with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
@@ -481,10 +552,10 @@ class Inference:
 # ===============================================================
 class InferenceConfig:
     resume: bool = True
-    vla_path: str = "./omnivla-original"
-    resume_step: Optional[int] = 120000    
-    #vla_path: str = "./omnivla-finetuned-cast"    
-    #resume_step: Optional[int] = 210000
+    # vla_path: str = "./omnivla-original"
+    # resume_step: Optional[int] = 120000    
+    vla_path: str = "./omnivla-finetuned-cast"    
+    resume_step: Optional[int] = 210000
     use_l1_regression: bool = True
     use_diffusion: bool = False
     use_film: bool = False
@@ -558,31 +629,40 @@ def define_model(cfg: InferenceConfig) -> None:
 # Main Entry
 # ===============================================================
 if __name__ == "__main__":
-    # select modality
-    pose_goal = False
-    satellite = False
-    image_goal = True
-    lan_prompt = False
-
-    # Goal definitions
-    lan_inst_prompt = "move toward blue trash bin"
-    goal_lat, goal_lon, goal_compass = 37.8738930785863, -122.26746181032362, 0.0
-    goal_utm = utm.from_latlon(goal_lat, goal_lon)
-    goal_compass = -float(goal_compass) / 180.0 * math.pi
-    goal_image_PIL = Image.open("./inference/goal_img.jpg").convert("RGB")
-
     # Define models (VLA, action_head, pose_projector, processor, etc.)
-    cfg = InferenceConfig()
-    vla, action_head, pose_projector, device_id, NUM_PATCHES, action_tokenizer, processor = define_model(cfg)
 
+    # select modality
+    modality = {
+        "pose_goal": True,
+        "satellite": False,
+        "image_goal": False,
+        "lan_prompt": False
+    }
     # Run inference
     inference = Inference(
         save_dir="./inference",
-        lan_inst_prompt=lan_inst_prompt,
-        goal_utm=goal_utm,
-        goal_compass=goal_compass,
-        goal_image_PIL=goal_image_PIL,
-        action_tokenizer=action_tokenizer,
-        processor=processor,
+        ego_frame_mode=True,
+        save_images=True
     )
+
+    inference.modality = modality
+
+    # Goal definitions
+    lan_inst_prompt = "move toward blue trash bin"
+    goal_lat, goal_lon, goal_compass = 1, 0, 0.0
+    current_lat, current_lon, current_compass = 0, 0, 0
+
+    inference.update_current_state(
+        current_image=Image.open("./inference/curr_img.jpg").convert("RGB"),   # to be updated in run_omnivla
+        current_utm=(current_lat, current_lon),
+        current_compass=current_compass,
+    )
+
+    inference.update_goal(
+        goal_utm=(goal_lat, goal_lon),
+        goal_compass=goal_compass,
+        goal_image_PIL=Image.open("./inference/goal_img.jpg").convert("RGB"),   # to be updated in run_omnivla
+        lan_inst_prompt=lan_inst_prompt,
+    )
+
     inference.run()

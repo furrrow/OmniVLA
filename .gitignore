@@ -25,3 +25,6 @@ omnivla-edge/
 **/__pycache__/
 # Ignore all wandb directories everywhere
 **/wandb/
+
+inference/*.png
+inference/curr_img.jpg
