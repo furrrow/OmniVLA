@@ -13,96 +13,94 @@ authors = [
 description = "OmniVLA: An Omni-Modal Vision-Language-Action Model for Robot Navigation"
 version = "0.0.1"
 readme = "README.md"
-requires-python = ">=3.8"
-keywords = ["vision-language-action model", "vision-based navigation", "robot learning"]
+requires-python = ">=3.10,<3.11"
 license = {file = "LICENSE"}
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Education",
-    "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3 :: Only",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
-]
 dependencies = [
-    "accelerate>=0.25.0",
-    "draccus==0.8.0",
-    "einops",
-    # "flash_attn==2.5.5",      # Here for documentation -- install *AFTER* editable install (follow README)
-    "huggingface_hub==0.29.1",
-    "json-numpy",
-    "jsonlines",
+    # Core numerical / scientific computing
+    "numpy",
+    "scipy",
     "matplotlib",
-    "peft==0.11.1",
-    "protobuf",
-    "rich",
-    "sentencepiece==0.1.99",
-    "timm==0.9.10",
-    "tokenizers==0.19.1",
+    # PyTorch / deep learning
     "torch==2.2.0",
     "torchvision==0.17.0",
     "torchaudio==2.2.0",
-    "transformers @ git+https://github.com/moojink/transformers-openvla-oft.git",  # IMPORTANT: Use this fork for bidirectional attn (for parallel decoding)
-    "wandb",
+    "accelerate>=0.25.0",
+    "peft==0.11.1",
+    "timm==0.9.10",
+    "efficientnet_pytorch",
+    "diffusers==0.11.1",
+    # FlashAttention
+    # Install separately AFTER the main environment is working.
+    # "flash-attn==2.5.5",
+    # Hugging Face / language models
+    "huggingface_hub",
+    "tokenizers",
+    "sentencepiece",
+    # OmniVLA / OpenVLA-specific forks
+    "transformers @ git+https://github.com/moojink/transformers-openvla-oft.git",  # Bidirectional attention for parallel decoding
+    "dlimp @ git+https://github.com/moojink/dlimp_openvla",
+    # TensorFlow / data pipeline
     "tensorflow==2.15.0",
     "tensorflow_datasets==4.9.3",
     "tensorflow_graphics==2021.12.3",
-    "dlimp @ git+https://github.com/moojink/dlimp_openvla",
-    "diffusers==0.11.1",
+    "tensorflow-metadata==1.16.1",
+    # Protobuf
+    "protobuf>=3.20.3,<4.21",
+    # Experiment tracking
+    "wandb==0.16.6",
+    # Computer vision / image & video
+    "opencv-python",
+    "Pillow",
     "imageio",
-    "uvicorn",
-    "fastapi",
-    "utm",
+    "av",
+    "openai-clip",
+    # Data / storage
+    "datasets",
+    "json-numpy",
+    "jsonlines",
     "lmdb",
     "zarr",
-    "datasets",
-    "efficientnet_pytorch",
-    "av"
-    "openai-clip"
+    # Configuration / utilities
+    "draccus",
+    "PyYAML",
+    "rich",
+    "utm",
+    # Web / serving
+    "fastapi",
+    "uvicorn",
 ]
-
-[project.optional-dependencies]
-dev = [
-    "black>=24.2.0",
-    "gpustat",
-    "ipython",
-    "pre-commit",
-    "ruff>=0.2.2",
-]
-sagemaker = [
-    "boto3",
-    "sagemaker"
-]
-
-[project.urls]
-homepage = "https://omnivla-nav.github.io"
-repository = "https://github.com/NHirose/OmniVLA"
 
 [tool.setuptools.packages.find]
 where = ["."]
-exclude = ["cache"]
+include = [
+    "prismatic*",
+    "inference*",
+    "config_nav*",
+]
+exclude = [
+    "cache*",
+    "experiments*",
+]
 
-[tool.setuptools.package-data]
-"prismatic" = ["py.typed"]
+[tool.uv]
+environments = ["sys_platform == 'linux'"]
 
-[tool.black]
-line-length = 121
-target-version = ["py38", "py39", "py310"]
-preview = true
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+torchvision = { index = "pytorch-cu121" }
+torchaudio = { index = "pytorch-cu121" }
 
-[tool.ruff]
-line-length = 121
-target-version = "py38"
+#[[tool.uv.index]]
+#name = "astral-cu130"
+#url = "https://wheels.astral.sh/simple/cu130/"
+#explicit = true
 
-[tool.ruff.lint]
-select = ["A", "B", "E", "F", "I", "RUF", "W"]
-ignore = ["F722"]
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
 
-[tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["E402", "F401"]
+[tool.uv.extra-build-dependencies]
+flash-attn = [
+    { requirement = "torch", match-runtime = true }
+]
