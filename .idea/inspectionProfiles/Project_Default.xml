@@ -1,0 +1,33 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="flash-attn" />
+          <option value="sam3" />
+          <option value="ftfy" />
+          <option value="huggingface-hub" />
+          <option value="iopath" />
+          <option value="numba" />
+          <option value="pandas" />
+          <option value="pycocotools" />
+          <option value="regex" />
+          <option value="scikit-image" />
+          <option value="scikit-learn" />
+          <option value="scipy" />
+          <option value="timm" />
+          <option value="torchvision" />
+          <option value="wheel" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyStubPackagesAdvertiser" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="scipy" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>

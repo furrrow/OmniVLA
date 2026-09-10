@@ -1,10 +1,14 @@
+"""
+ros_utils.py
+Modification as part of CHOP project, credit to Gershom S.
+"""
 import json
 import math
 import numpy as np
 import cv2 
 from typing import Optional, Tuple
 
-def load_calibration(json_path: str, fx: float, fy: float, cx: float, cy: float, mode: str = "jackal"):
+def load_calibration(json_path: str, fx: float, fy: float, cx: float, cy: float, mode=None):
     """
     Builds:
       K (3x3), dist=None, T_cam_from_base (4x4)
@@ -12,7 +16,10 @@ def load_calibration(json_path: str, fx: float, fy: float, cx: float, cy: float,
     """
     with open(json_path, "r") as f:
         data = json.load(f)
-    entry = data.get(mode, None)
+    if mode is not None:
+        entry = data.get(mode, None)
+    else:
+        entry = data
     if entry is None or "H_cam_bl" not in entry:
         raise ValueError(f"Missing '{mode}' in {json_path}")
 

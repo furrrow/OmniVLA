@@ -1,3 +1,8 @@
+"""
+run_omnivla_rosbag.py
+Modification as part of CHOP project, credit to Gershom S.
+
+"""
 import sys, os, glob
 from pathlib import Path
 
@@ -32,16 +37,17 @@ class FrameItem:
     rotation: np.ndarray
     yaw: float
 
+
 class InferenceROSBag():
-    def __init__(self, bag_path: str, calib_path: str, topics_path: str, timestamp_path: str,vla: Inference):
+    def __init__(self, bag_path: str, calib_path: str, topics_path: str, timestamp_path: str, vla: Inference):
         self.bag_path = bag_path
         self.bag_name = Path(bag_path).name
         self.needs_correction = False
         stem = Path(self.bag_name).stem
 
         fx, fy, cx, cy = 640.0, 637.0, 640.0, 360.0
-        self.looakhead = 2.4 #s
-        self.frames : list[FrameItem] = []
+        self.looakhead = 2.4  # s
+        self.frames: list[FrameItem] = []
         self.bridge = CvBridge()
 
         self.expert_action_annotation_dir = os.path.join(timestamp_path, self.bag_name.replace(".bag", ".json"))
@@ -55,7 +61,7 @@ class InferenceROSBag():
         except Exception as e:
             print(f"[WARN] Could not load expert action annotations from {self.expert_action_annotation_dir}: {e}")
             raise e
-        
+
         self.timestamps = self._get_timestamps_from_expert_annotations()
 
         if "Jackal" in self.bag_name:
@@ -358,6 +364,6 @@ if __name__ == "__main__":
             continue
 
         print(f"[INFO] Processing {bp}")
-        inference = InferenceROSBag(bag_path=bp, calib_path=calib_path, topics_path=topic_json_path, 
+        inference = InferenceROSBag(bag_path=bp, calib_path=calib_path, topics_path=topic_json_path,
                                     timestamp_path=timestamp_path, vla=omnivla)
         inference.run_rosbag()

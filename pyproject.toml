@@ -68,6 +68,8 @@ dependencies = [
     # Web / serving
     "fastapi",
     "uvicorn",
+    # custom
+    "custom_utils",
 ]
 
 [tool.setuptools.packages.find]
@@ -89,11 +91,7 @@ environments = ["sys_platform == 'linux'"]
 torch = { index = "pytorch-cu121" }
 torchvision = { index = "pytorch-cu121" }
 torchaudio = { index = "pytorch-cu121" }
-
-#[[tool.uv.index]]
-#name = "astral-cu130"
-#url = "https://wheels.astral.sh/simple/cu130/"
-#explicit = true
+custom_utils = { workspace = true }
 
 [[tool.uv.index]]
 name = "pytorch-cu121"
@@ -104,3 +102,5 @@ explicit = true
 flash-attn = [
     { requirement = "torch", match-runtime = true }
 ]
+[tool.uv.workspace]
+members = ["custom_utils"]

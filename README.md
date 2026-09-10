@@ -1,14 +1,5 @@
-# OmniVLA: An Omni-Modal Vision-Language-Action Model for Robot Navigation
-[![Python](https://img.shields.io/badge/python-3.10-blue)](https://www.python.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Static Badge](https://img.shields.io/badge/Project-Page-a)](https://omnivla-nav.github.io)
-
-
-[Noriaki Hirose](https://sites.google.com/view/noriaki-hirose/)<sup>1, 2</sup>, [Catherine Glossop](https://catglossop.github.io/)<sup>1</sup>, [Dhruv Shah](https://robodhruv.github.io/)<sup>3</sup>, [Sergey Levine](https://people.eecs.berkeley.edu/~svlevine/)<sup>1</sup>
-
-<sup>1</sup> UC Berkeley (_Berkeley AI Research_),  <sup>2</sup> Toyota Motor North America, ,  <sup>3</sup> Princeton University
-
-IEEE International Conference on Robotics and Automation (ICRA) 2026
+# OmniVLA: custom branch
+- see run_omnivla_modified...
 
 ### Installation
 Please set up a conda environment (see instructions in [SETUP.md](SETUP.md)).
@@ -29,6 +20,8 @@ Please set up a conda environment (see instructions in [SETUP.md](SETUP.md)).
 4. Run OmniVLA to control the real robot. Modify "run_omnivla.py" to update the robot’s state (camera image, GPS signal) and adjust the goal information accordingly. Then, feed the generated velocity commands to your robot.
 
 5. To try the finetuned checkpoints with the CAST dataset, update the path and step number in "InferenceConfig" within "run_omnivla.py".
+
+### Inference: OmniVLA-modified
 
 ### Inference: OmniVLA-edge
 1. Download our checkpoints and place them in our directory. 

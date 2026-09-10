@@ -1,13 +1,11 @@
-# ===============================================================
-# OmniVLA Inference
-# ===============================================================
-# 
+"""
+run_omnivla_modified.py
+Modification as part of CHOP project, credit to Gershom S.
+sample inference code derived from run_omnivla.py
+original comment:
 # Sample inference code for OmniVLA
 # if you want to control the robot, you need to update the current state such as pose and image in "run_omnivla" and comment out "break" in "run".
-#
-# ---------------------------
-# Paths and System Setup
-# ---------------------------
+"""
 import sys, os
 sys.path.insert(0, '..')
 
@@ -82,7 +80,7 @@ def init_module(
 # Inference Class
 # ===============================================================
 class Inference:
-    def __init__(self, save_dir, ego_frame_mode, vla_config,save_images=False, radians=False):
+    def __init__(self, save_dir, ego_frame_mode, vla_config=None, modality=None, save_images=False, radians=False):
         self.tick_rate = 3
         self.vla = None
         self.action_head = None
@@ -111,13 +109,19 @@ class Inference:
         self.goal_pose_loc_norm = None
 
         self.thres_dist = 30.0
-        self.metric_waypoint_spacing = 0.38 # meter per waypoint unit for SCAND
+        # self.metric_waypoint_spacing = 0.38 # original is 0.1, 0.38 for scand
+        self.metric_waypoint_spacing = 0.38 # inflating this number for sanity
 
-        self.pose_goal = self.modality["pose_goal"]
-        self.satellite = self.modality["satellite"]
-        self.image_goal = self.modality["image_goal"]
-        self.lan_prompt = self.modality["lan_prompt"]
-
+        if self.modality is not None:
+            self.pose_goal = self.modality["pose_goal"]
+            self.satellite = self.modality["satellite"]
+            self.image_goal = self.modality["image_goal"]
+            self.lan_prompt = self.modality["lan_prompt"]
+        else: # default vals
+            self.pose_goal = True
+            self.satellite = False
+            self.image_goal = False
+            self.lan_prompt = False
         self.waypoints = None
         self.save_images = save_images
         self.radians = radians
@@ -130,14 +134,6 @@ class Inference:
             cfg = self.vla_config
             
         self.vla, self.action_head, self.pose_projector, self.device_id, self.NUM_PATCHES, self.action_tokenizer, self.processor = define_model(cfg)
-
-        # select modality
-        self.modality = {
-            "pose_goal": True,
-            "satellite": False,
-            "image_goal": False,
-            "lan_prompt": False
-        }
 
     # ----------------------------
     # Static Utility Methods
@@ -312,6 +308,7 @@ class Inference:
 
         # print("linear angular", linear_vel_value_limit, angular_vel_value_limit)
         # print(self.waypoints)
+        # dx, dy, hx, hy = self.waypoints
         return self.waypoints
 
     # ----------------------------
@@ -552,9 +549,9 @@ class Inference:
 # ===============================================================
 class InferenceConfig:
     resume: bool = True
-    # vla_path: str = "./omnivla-original"
-    # resume_step: Optional[int] = 120000    
-    vla_path: str = "./omnivla-finetuned-cast"    
+    # vla_path: str = "../omnivla-original"
+    # resume_step: Optional[int] = 120000
+    vla_path: str = "../omnivla-finetuned-cast"
     resume_step: Optional[int] = 210000
     use_l1_regression: bool = True
     use_diffusion: bool = False
@@ -567,7 +564,6 @@ class InferenceConfig:
 def define_model(cfg: InferenceConfig) -> None:
     cfg.vla_path = cfg.vla_path.rstrip("/")
     print(f"Loading OpenVLA Model `{cfg.vla_path}`")
-
     # GPU setup
     device_id = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     torch.cuda.set_device(device_id)
@@ -641,19 +637,21 @@ if __name__ == "__main__":
     # Run inference
     inference = Inference(
         save_dir="./inference",
+        modality=modality,
         ego_frame_mode=True,
         save_images=True
     )
-
-    inference.modality = modality
-
+    print(f"pose_goal: {inference.pose_goal}")
+    print(f"satellite: {inference.satellite}")
+    print(f"image_goal: {inference.image_goal}")
+    print(f"lan_prompt: {inference.lan_prompt}")
     # Goal definitions
     lan_inst_prompt = "move toward blue trash bin"
     goal_lat, goal_lon, goal_compass = 1, 0, 0.0
-    current_lat, current_lon, current_compass = 0, 0, 0
-
+    current_lat, current_lon, current_compass = 0, 0, 0.0
+    visualize = True
     inference.update_current_state(
-        current_image=Image.open("./inference/curr_img.jpg").convert("RGB"),   # to be updated in run_omnivla
+        current_image=Image.open("0.png").convert("RGB"),   # to be updated in run_omnivla
         current_utm=(current_lat, current_lon),
         current_compass=current_compass,
     )
@@ -661,8 +659,10 @@ if __name__ == "__main__":
     inference.update_goal(
         goal_utm=(goal_lat, goal_lon),
         goal_compass=goal_compass,
-        goal_image_PIL=Image.open("./inference/goal_img.jpg").convert("RGB"),   # to be updated in run_omnivla
+        goal_image_PIL=Image.open("101.png").convert("RGB"),   # to be updated in run_omnivla
         lan_inst_prompt=lan_inst_prompt,
     )
 
     inference.run()
+    waypoints = inference.waypoints * inference.metric_waypoint_spacing
+    print(waypoints)
