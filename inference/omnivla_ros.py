@@ -43,7 +43,12 @@ class OmniVLANode(Node):
         with open(DEPLOY_CONFIG_PATH, "r") as f:
             deploy_config = yaml.safe_load(f)
         self.rate = deploy_config["frame_rate"]
-        self.waypoint_idx = deploy_config['waypoint_idx']
+
+        # NOTE: omnivla code has waypoint idx hard coded to 4, I will do the same here:
+        # see: https://github.com/NHirose/OmniVLA/blob/5182600cb4a9ee07684e17cdd2a6cbafc56b8a68/inference/run_omnivla.py#L193
+        self.waypoint_idx = 4
+        # self.waypoint_idx = deploy_config['waypoint_idx']
+
         robot_config = deploy_config[args.robot]
         print(f"using robot config for: {args.robot}")
         self.max_v = robot_config["max_v"]
