@@ -45,7 +45,8 @@ def main() -> int:
     stream_type = "video"  # ["yarp", "video", "webcam"]
     # video_path = "/home/jim/Projects/steernav/assets/Cars_and_Gasstation.mp4"
     # video_path = "/home/jim/Projects/steernav/assets/jim_flownav_test.mp4"
-    video_path = "/home/jim/Projects/steernav/assets/corridoor_omni_ft_2_left.mp4"
+    # video_path = "/home/jim/Projects/steernav/assets/corridoor_omni_ft_2_left.mp4"
+    video_path = "corridoor_omni_ft_2_left.mp4"
     # video_path = "/home/jim/Projects/steernav/assets/close_up_bug_20260909_114902.mp4"
     camera_matrix_dir = "cam_matrix.json"
     # camera_matrix_dir = "ghost_fl_cam_matrix.json"
@@ -53,8 +54,8 @@ def main() -> int:
     webcam_index = 0
     device = "cuda" if torch.cuda.is_available() else "cpu"
     current_pos, current_yaw = np.array([0, 0]), 0.0
-    goal_pil_image = Image.open("101.png").convert("RGB")
-    goal_pos, goal_yaw = np.array([10, 0]), 0.0 # 10, 0 shows a path that turns more towards right?
+    goal_pil_image = Image.open("irb_5207.png").convert("RGB")
+    # goal_pos, goal_yaw = np.array([10, 0]), 0.0 # 10, 0 shows a path that turns more towards right?
     goal_pos, goal_yaw = np.array([0, 10]), 0.0
 
     """

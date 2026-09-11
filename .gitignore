@@ -28,3 +28,6 @@ omnivla-edge/
 
 inference/*.png
 inference/curr_img.jpg
+.idea/
+images/
+*.mp4

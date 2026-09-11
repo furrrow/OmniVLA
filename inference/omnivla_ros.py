@@ -33,13 +33,14 @@ class OmniVLANode(Node):
         self.obs_img = None
         self.current_yaw = None
         # CONSTANTS
-        parent_dir = "/home/jim/Projects/OmniVLA"
-        # parent_dir = "/home/gamma-nav/Documents/Projects/git_repos/OmniVLA"
+        # parent_dir = "/home/jim/Projects/OmniVLA"
+        parent_dir = "/home/gamma-nav/Documents/Projects/git_repos/OmniVLA"
         # parent_dir = "/workspace/OmniVLA"
         DEPLOY_CONFIG_PATH = f"{parent_dir}/inference/config/robot.yaml"
         # MODEL_CONFIG_PATH = "config/models.yaml"
         CAMERA_MATRIX_DIR = f"{parent_dir}/inference/cam_matrix.json"
-        GOAL_IMG_PATH = f"{parent_dir}/inference/101.png"
+        GOAL_IMG_PATH = f"{parent_dir}/inference/irb_5207.png"
+        # GOAL_IMG_PATH = f"{parent_dir}/inference/goal_img.jpg"
         with open(DEPLOY_CONFIG_PATH, "r") as f:
             deploy_config = yaml.safe_load(f)
         self.rate = deploy_config["frame_rate"]
@@ -97,7 +98,7 @@ class OmniVLANode(Node):
         )
 
         self.goal_pil_image = PILImage.open(GOAL_IMG_PATH).convert("RGB")
-        self.goal_pos, self.goal_yaw = np.array([1, 0]), 0.0
+        self.goal_pos, self.goal_yaw = np.array([0, 10]), 0.0
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("Using device:", self.device)
@@ -215,11 +216,12 @@ class OmniVLANode(Node):
             self.model.update_goal(goal_image_PIL=self.goal_pil_image,
                               goal_utm=self.goal_pos,
                               goal_compass=self.goal_yaw,
-                              lan_inst_prompt="go to the fridge")
+                              lan_inst_prompt=None)
             self.model.run()
 
             waypoints = self.model.waypoints.reshape(-1, self.model.waypoints.shape[-1])
             path_xy = waypoints[:, :2] * self.model.metric_waypoint_spacing  # Convert to meters
+            print(path_xy)
             self.pub_path.publish(self._to_path_msg(path_xy))
             self.get_logger().info(f"publishing path # {self.waypoint_idx} of path: path_xy")
             chosen_waypoint = path_xy[self.waypoint_idx]
@@ -227,7 +229,7 @@ class OmniVLANode(Node):
             # visualization code
             if self.visualize:
                 overlay_img = overlay_path(trajectories=path_xy,
-                                           img=np.array(self.obs_img),
+                                           img=np.array(self.obs_img.resize(self.original_img_size)),
                                            cam_matrix=self.cam_matrix,
                                            T_cam_from_base=self.T_cam_from_base, )
                 out_msg = self.br.cv2_to_imgmsg(np.array(overlay_img), encoding="rgb8")

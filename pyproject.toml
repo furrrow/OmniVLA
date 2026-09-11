@@ -21,9 +21,9 @@ dependencies = [
     "scipy",
     "matplotlib",
     # PyTorch / deep learning
-    "torch==2.2.0",
-    "torchvision==0.17.0",
-    "torchaudio==2.2.0",
+    "torch==2.7.1",
+    "torchvision==0.22.1",
+    "torchaudio==2.7.1",
     "accelerate>=0.25.0",
     "peft==0.11.1",
     "timm==0.9.10",
@@ -70,6 +70,7 @@ dependencies = [
     "uvicorn",
     # custom
     "custom_utils",
+    "scipy-stubs~=1.15.3",
 ]
 
 [tool.setuptools.packages.find]
@@ -88,14 +89,14 @@ exclude = [
 environments = ["sys_platform == 'linux'"]
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu121" }
-torchvision = { index = "pytorch-cu121" }
-torchaudio = { index = "pytorch-cu121" }
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
 custom_utils = { workspace = true }
 
 [[tool.uv.index]]
-name = "pytorch-cu121"
-url = "https://download.pytorch.org/whl/cu121"
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.uv.extra-build-dependencies]
