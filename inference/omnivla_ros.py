@@ -65,7 +65,7 @@ class OmniVLANode(Node):
         self.path_frame_id = "base_link"
         self._started_sent = False
         self.show_time_performance = False
-        self.visualize = True
+        self.visualize = args.overlay
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(
@@ -285,5 +285,7 @@ if __name__ == "__main__":
         description="ros inference pipeline according to a depth-map ESDF."
     )
     parser.add_argument("-r", "--robot", type=str, help="Robot Name", default="husky")
+    parser.add_argument("--overlay", action="store_true",
+                        help="enable overlay, default false")
     args = parser.parse_args()
     main(args)
