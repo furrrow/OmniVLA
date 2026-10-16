@@ -16,8 +16,10 @@ git clone https://huggingface.co/NHirose/omnivla-original-balance
 git clone https://huggingface.co/NHirose/omnivla-finetuned-cast 
 ```
 ### Inference
-!! Using [inference/run_omnivla_modified.py](inference/run_omnivla_modified.py) as base, please diff and check out the changes compared to 
-the original [inference/run_omnivla.py](inference/run_omnivla.py)
+The maintained inference wrapper is [inference/run_omnivla.py](inference/run_omnivla.py).
+
+For language-conditioned evaluation with the DynaNav Isaac Sim benchmark, see
+[ISAACSIM_ROS.md](ISAACSIM_ROS.md).
 
 #### 1 ./inference/video_inference.py does continuous inference over a video
 - uses images inside the inference/ as start and goal images

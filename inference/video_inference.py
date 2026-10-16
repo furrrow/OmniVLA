@@ -16,7 +16,7 @@ from transformers import AutoProcessor, AutoModelForCausalLM
 
 import matplotlib
 
-from inference.run_omnivla_modified import Inference
+from inference.run_omnivla import Inference
 
 matplotlib.use("TkAgg")
 
@@ -59,7 +59,7 @@ def main() -> int:
     goal_pos, goal_yaw = np.array([0, 10]), 0.0
 
     """
-    from run_omnivla_modified.py,
+    from run_omnivla.py,
     also see CHOP's model_run.py's omnivla inference script:
     https://github.com/gershom96/CHOP/blob/d46b2b9e07586ac512e10972dc4d5a4d68cbe3f7/deployment/model_run.py#L406
     

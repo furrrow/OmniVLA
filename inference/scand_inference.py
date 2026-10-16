@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.append(os.path.dirname(__file__))
 
 from dataclasses import dataclass
-from run_omnivla_modified import Inference, InferenceConfig, define_model
+from run_omnivla import Inference, InferenceConfig, define_model
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 import json
