@@ -9,6 +9,8 @@ STEERNAV_ROOT="${STEERNAV_ROOT:-/home/jim/Projects/steernav}"
 MODE="normal"
 DETACH=false
 SESSION_NAME=""
+CONTROLLER_DT="0.75"
+LOG_ROOT="${NOVA_ROS_LOG_ROOT:-${REPO_ROOT}/logs/nova_ros}"
 
 if [[ $# -gt 0 && ( "$1" == "normal" || "$1" == "steered" ) ]]; then
   MODE="$1"
@@ -17,17 +19,29 @@ fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --detach) DETACH=true; shift ;;
+    --detach)
+      DETACH=true
+      shift
+      ;;
     --session-name)
       [[ $# -ge 2 ]] || { echo "--session-name requires a value" >&2; exit 2; }
       SESSION_NAME="$2"
       shift 2
       ;;
+    --dt)
+      [[ $# -ge 2 ]] || { echo "--dt requires a value" >&2; exit 2; }
+      CONTROLLER_DT="$2"
+      shift 2
+      ;;
     -h|--help)
-      echo "Usage: $0 [normal|steered] [--detach] [--session-name NAME]"
+      echo "Usage: $0 [normal|steered] [--detach] [--session-name NAME] [--dt SECONDS]"
       exit 0
       ;;
-    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      echo "Usage: $0 [normal|steered] [--detach] [--session-name NAME] [--dt SECONDS]" >&2
+      exit 2
+      ;;
   esac
 done
 
@@ -35,9 +49,18 @@ if [[ -n "${SESSION_NAME}" && ! "${SESSION_NAME}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
   echo "Session name may contain only letters, numbers, dots, underscores, and hyphens." >&2
   exit 2
 fi
+if [[ ! "${CONTROLLER_DT}" =~ ^[0-9]+([.][0-9]+)?$ ]] || [[ ! "${CONTROLLER_DT}" =~ [1-9] ]]; then
+  echo "Controller dt must be a positive number of seconds." >&2
+  exit 2
+fi
+
+echo "Mode: ${MODE}"
+echo "Robot config: ${ROBOT_CONFIG}"
+echo "Controller dt: ${CONTROLLER_DT}s"
+
 [[ -f "${ROS_SETUP}" ]] || { echo "ROS setup not found: ${ROS_SETUP}" >&2; exit 1; }
 [[ -f "${ROBOT_CONFIG}" ]] || { echo "Robot config not found: ${ROBOT_CONFIG}" >&2; exit 1; }
-command -v tmux >/dev/null 2>&1 || { echo "tmux is not installed." >&2; exit 1; }
+command -v tmux >/dev/null 2>&1 || { echo "tmux is not installed or not on PATH." >&2; exit 1; }
 if [[ "${MODE}" == "steered" && ! -f "${STEERNAV_ROOT}/steernav/ros_inference.py" ]]; then
   echo "Set STEERNAV_ROOT to a SteerNav checkout." >&2
   exit 1
@@ -49,6 +72,22 @@ if tmux has-session -t "${session_name}" 2>/dev/null; then
   exit 1
 fi
 
+log_dir="${LOG_ROOT}/${session_name}"
+mkdir -p "${log_dir}"
+inference_log="${log_dir}/inference.log"
+controller_log="${log_dir}/controller.log"
+steernav_log="${log_dir}/steernav.log"
+
+run_in_pane() {
+  local pane="$1"
+  local log_file="$2"
+  local command="$3"
+  local quoted_log
+  printf -v quoted_log '%q' "${log_file}"
+  tmux send-keys -t "${pane}" \
+    "set -o pipefail; export PYTHONUNBUFFERED=1; ( ${command} ) 2>&1 | tee -a ${quoted_log}" C-m
+}
+
 tmux new-session -d -s "${session_name}" -c "${REPO_ROOT}"
 inference_pane="$(tmux display-message -p -t "${session_name}:0.0" '#{pane_id}')"
 controller_pane="$(tmux split-window -h -P -F '#{pane_id}' -t "${inference_pane}" -c "${REPO_ROOT}")"
@@ -56,24 +95,29 @@ tmux set-option -t "${session_name}" mouse on
 tmux select-pane -t "${inference_pane}" -T "OmniVLA inference"
 tmux select-pane -t "${controller_pane}" -T "Waypoint controller"
 
-tmux send-keys -t "${inference_pane}" \
-  "source ${ROS_SETUP} && export ROS_DOMAIN_ID=${ROS_DOMAIN_ID} && uv run python inference/omnivla_ros.py --robot sim_nova --config ${ROBOT_CONFIG}" C-m
+inference_flags=""
+if [[ "${MODE}" == "normal" ]]; then
+  inference_flags="--visualize"
+fi
+run_in_pane "${inference_pane}" "${inference_log}" \
+  "source ${ROS_SETUP} && export ROS_DOMAIN_ID=${ROS_DOMAIN_ID} && uv run python inference/omnivla_ros.py --robot sim_nova --config ${ROBOT_CONFIG} ${inference_flags} --ros-args -p use_sim_time:=true"
 
 controller_flags="--simulation-episode-control"
 if [[ "${MODE}" == "steered" ]]; then
   controller_flags="--steer ${controller_flags}"
   steernav_pane="$(tmux split-window -v -P -F '#{pane_id}' -t "${controller_pane}" -c "${STEERNAV_ROOT}")"
   tmux select-pane -t "${steernav_pane}" -T "SteerNav"
-  tmux send-keys -t "${steernav_pane}" \
-    "source ${ROS_SETUP} && export ROS_DOMAIN_ID=${ROS_DOMAIN_ID} && uv run steernav/ros_inference.py --robot sim_nova" C-m
+  run_in_pane "${steernav_pane}" "${steernav_log}" \
+    "source ${ROS_SETUP} && export ROS_DOMAIN_ID=${ROS_DOMAIN_ID} && uv run steernav/ros_inference.py --robot sim_nova --debug-motion --ros-args -p use_sim_time:=true"
   tmux select-layout -t "${session_name}:0" tiled
 fi
 
-tmux send-keys -t "${controller_pane}" \
-  "source ${ROS_SETUP} && export ROS_DOMAIN_ID=${ROS_DOMAIN_ID} && uv run python custom_utils/custom_utils/kinematic_controller_naive.py --robot sim_nova --config ${ROBOT_CONFIG} --dt 1.5 ${controller_flags}" C-m
+run_in_pane "${controller_pane}" "${controller_log}" \
+  "source ${ROS_SETUP} && export ROS_DOMAIN_ID=${ROS_DOMAIN_ID} && uv run python custom_utils/custom_utils/kinematic_controller_naive.py --robot sim_nova --config ${ROBOT_CONFIG} --dt ${CONTROLLER_DT} ${controller_flags} --ros-args -p use_sim_time:=true"
 
 tmux select-pane -t "${inference_pane}"
 echo "TMUX_SESSION=${session_name}"
+echo "LOG_DIR=${log_dir}"
 if [[ "${DETACH}" == true ]]; then
   exit 0
 elif [[ -n "${TMUX:-}" ]]; then

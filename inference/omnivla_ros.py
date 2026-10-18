@@ -46,6 +46,38 @@ DEFAULT_GOAL_IMAGE = Path(__file__).resolve().parent / "101.png"
 DEFAULT_INSTRUCTION = "Move forward safely and avoid obstacles."
 
 
+def stamp_to_ns(stamp: Any) -> int:
+    return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+
+
+def select_lookahead_index(path_xy: np.ndarray, lookahead_distance: float) -> int:
+    """Select the first path point at the requested polyline arc length."""
+    if len(path_xy) == 0:
+        raise ValueError("Cannot select a waypoint from an empty path.")
+    if len(path_xy) == 1:
+        return 0
+
+    segment_lengths = np.linalg.norm(np.diff(path_xy, axis=0), axis=1)
+    arc_lengths = np.concatenate(([0.0], np.cumsum(segment_lengths)))
+    index = int(np.searchsorted(arc_lengths, lookahead_distance, side="left"))
+    if len(path_xy) >= 5:
+        return int(np.clip(index, 2, len(path_xy) - 3))
+    return min(index, len(path_xy) - 1)
+
+
+def normalize_path_xy(waypoints: Any, metric_waypoint_spacing: float) -> np.ndarray:
+    """Convert model output to a finite metric ``(T, 2)`` path."""
+    array = np.asarray(waypoints)
+    if array.ndim == 3 and array.shape[0] == 1:
+        array = array[0]
+    if array.ndim != 2 or array.shape[1] < 2 or len(array) == 0:
+        raise ValueError(f"Expected OmniVLA waypoints shaped (T,2+), got {array.shape}")
+    path_xy = array[:, :2].astype(np.float64) * float(metric_waypoint_spacing)
+    if not np.isfinite(path_xy).all():
+        raise ValueError("OmniVLA returned non-finite waypoints")
+    return path_xy
+
+
 def load_robot_config(config_path: Path, robot: str) -> tuple[dict[str, Any], dict[str, Any]]:
     with config_path.open("r", encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
@@ -77,6 +109,7 @@ class OmniVLANode(Node):
         self.obs_header: Any | None = None
         self.obs_sequence = 0
         self.processed_sequence = 0
+        self.last_image_stamp_ns: int | None = None
         self.current_pos = np.zeros(2, dtype=np.float64)
         self.current_yaw = 0.0
         self.have_odom = False
@@ -97,6 +130,14 @@ class OmniVLANode(Node):
         )
         policy_path_topic = robot_config["policy_path_topic"]
         waypoint_topic = robot_config.get("waypoint_topic")
+        self.lookahead_distance = (
+            args.lookahead_distance
+            if args.lookahead_distance is not None
+            else robot_config.get("lookahead_distance", 1.0)
+        )
+        self.lookahead_distance = float(self.lookahead_distance)
+        if not math.isfinite(self.lookahead_distance) or self.lookahead_distance < 0:
+            raise ValueError("lookahead_distance must be finite and >= 0")
         sampled_actions_topic = robot_config["sampled_actions_topic"]
         overlay_topic = robot_config["overlay_topic"]
 
@@ -144,11 +185,10 @@ class OmniVLANode(Node):
                 callback_group=self.input_group,
             )
 
-        # In simulation, the Isaac bridge selects a lookahead point from the path.
         self.waypoint_pub = (
-            None
-            if self.require_episode or waypoint_topic is None
-            else self.create_publisher(Float32MultiArray, waypoint_topic, reliable_qos)
+            self.create_publisher(Float32MultiArray, waypoint_topic, reliable_qos)
+            if waypoint_topic is not None
+            else None
         )
         self.sampled_actions_pub = self.create_publisher(
             Float32MultiArray, sampled_actions_topic, best_effort_qos
@@ -170,6 +210,10 @@ class OmniVLANode(Node):
             f"IMAGE_TOPIC: {image_topic} compressed_img_topic: {self.compressed_img_topic}"
         )
         self.get_logger().info(f"ODOM_TOPIC: {odom_topic}")
+        if self.waypoint_pub is not None:
+            self.get_logger().info(
+                f"Selecting direct waypoints at {self.lookahead_distance:.2f}m path lookahead."
+            )
         if self.require_episode:
             self.get_logger().info(
                 f"Waiting for language instructions from {args.episode_topic}; "
@@ -208,6 +252,7 @@ class OmniVLANode(Node):
             self.obs_header = None
             self.obs_sequence = 0
             self.processed_sequence = 0
+            self.last_image_stamp_ns = None
             self.current_pos.fill(0.0)
             self.current_yaw = 0.0
             self.have_odom = False
@@ -223,6 +268,24 @@ class OmniVLANode(Node):
             if image.size != self.shrink_img_size:
                 image = image.resize(self.shrink_img_size)
             with self.lock:
+                stamp_ns = stamp_to_ns(msg.header.stamp)
+                if (
+                    self.last_image_stamp_ns is not None
+                    and stamp_ns < self.last_image_stamp_ns
+                ):
+                    self.episode_generation += 1
+                    self.pending_episode_reset = True
+                    self.obs_img = None
+                    self.obs_header = None
+                    self.obs_sequence = 0
+                    self.processed_sequence = 0
+                    self.current_pos.fill(0.0)
+                    self.current_yaw = 0.0
+                    self.have_odom = False
+                    self.get_logger().warning(
+                        "Camera timestamp moved backward; resetting OmniVLA observation state."
+                    )
+                self.last_image_stamp_ns = stamp_ns
                 self.obs_img = image
                 self.obs_header = msg.header
                 self.obs_sequence += 1
@@ -241,6 +304,21 @@ class OmniVLANode(Node):
     def reset_episode_state(self) -> None:
         self.model.count_id = 0
         self.model.waypoints = None
+        for attribute in (
+            "current_image",
+            "current_image_PIL",
+            "current_utm",
+            "current_compass",
+            "goal_image",
+            "goal_image_PIL",
+            "goal_utm",
+            "goal_compass",
+            "goal_pose_loc_norm",
+            "lan_inst",
+            "lan_inst_prompt",
+        ):
+            if hasattr(self.model, attribute):
+                setattr(self.model, attribute, None)
         self.started_sent = False
         self.inference_count = 0
         self.inference_start_time = time.perf_counter()
@@ -300,23 +378,23 @@ class OmniVLANode(Node):
             self.model.run()
         inference_seconds = time.perf_counter() - started
 
-        waypoints = np.asarray(self.model.waypoints)
-        if waypoints.ndim == 3 and waypoints.shape[0] == 1:
-            waypoints = waypoints[0]
-        if waypoints.ndim != 2 or waypoints.shape[1] < 2 or len(waypoints) == 0:
-            raise ValueError(f"Expected OmniVLA waypoints shaped (T,2+), got {waypoints.shape}")
-        path_xy = waypoints[:, :2].astype(np.float64) * float(self.model.metric_waypoint_spacing)
-        if not np.isfinite(path_xy).all():
-            raise ValueError("OmniVLA returned non-finite waypoints")
+        try:
+            path_xy = normalize_path_xy(
+                self.model.waypoints,
+                self.model.metric_waypoint_spacing,
+            )
+            waypoint_index = select_lookahead_index(path_xy, self.lookahead_distance)
+        except (TypeError, ValueError, OverflowError) as exc:
+            self.get_logger().error(f"Rejecting invalid OmniVLA prediction: {exc}")
+            return
 
         with self.lock:
             if generation != self.episode_generation:
                 return
             self.path_pub.publish(self.to_path_msg(path_xy, header.stamp))
             if self.waypoint_pub is not None:
-                index = min(max(self.args.waypoint_idx, 0), len(path_xy) - 1)
                 waypoint = Float32MultiArray()
-                waypoint.data = path_xy[index].astype(float).tolist()
+                waypoint.data = path_xy[waypoint_index].astype(float).tolist()
                 self.waypoint_pub.publish(waypoint)
             sampled = Float32MultiArray()
             sampled.data = path_xy.flatten().astype(float).tolist()
@@ -361,7 +439,12 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("-i", "--instruction", default=DEFAULT_INSTRUCTION)
     parser.add_argument("--rate", type=float)
     parser.add_argument("--frame-id", default="base_link")
-    parser.add_argument("--waypoint-idx", type=int, default=4)
+    parser.add_argument(
+        "--lookahead-distance",
+        type=float,
+        default=None,
+        help="Waypoint lookahead in meters. Defaults to the robot configuration.",
+    )
     parser.add_argument("--camera-matrix", default=str(DEFAULT_CAMERA_MATRIX))
     parser.add_argument("--goal-image", default=str(DEFAULT_GOAL_IMAGE))
     parser.add_argument("--metric-waypoint-spacing", type=float, default=None)
@@ -376,6 +459,10 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         not math.isfinite(args.metric_waypoint_spacing) or args.metric_waypoint_spacing <= 0
     ):
         parser.error("--metric-waypoint-spacing must be finite and greater than zero")
+    if args.lookahead_distance is not None and (
+        not math.isfinite(args.lookahead_distance) or args.lookahead_distance < 0
+    ):
+        parser.error("--lookahead-distance must be finite and nonnegative")
     if not args.instruction.strip():
         parser.error("--instruction must be nonempty")
     args.goal_image = PILImage.open(Path(args.goal_image).expanduser()).convert("RGB")

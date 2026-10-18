@@ -31,3 +31,4 @@ inference/curr_img.jpg
 .idea/
 images/
 *.mp4
+logs/*
