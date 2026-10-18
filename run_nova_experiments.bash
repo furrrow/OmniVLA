@@ -170,15 +170,26 @@ echo "Controller dt: ${CONTROLLER_DT}s"
 ssh -o BatchMode=yes -o ConnectTimeout=10 "${REMOTE_HOST}" \
   "cd ${REMOTE_REPO} && DISPLAY=${REMOTE_DISPLAY} ./run_sim.bash --check --scenario ${SCENARIO}"
 
-if [[ "${MODE}" == "normal" || "${MODE}" == "both" || "${MODE}" == "ablation" ]]; then
-  run_mode normal
-fi
-if [[ "${MODE}" == "steered" || "${MODE}" == "both" || "${MODE}" == "ablation" ]]; then
-  run_mode steered
-fi
-if [[ "${MODE}" == "no-velocity" || "${MODE}" == "ablation" ]]; then
-  run_mode no-velocity
-fi
+case "${MODE}" in
+  normal)
+    run_mode normal
+    ;;
+  steered)
+    run_mode steered
+    ;;
+  no-velocity)
+    run_mode no-velocity
+    ;;
+  both)
+    run_mode normal
+    run_mode steered
+    ;;
+  ablation)
+    run_mode normal
+    run_mode steered
+    run_mode no-velocity
+    ;;
+esac
 
 echo "Requested OmniVLA experiment mode '${MODE}' completed."
 if [[ "${MODE}" == "ablation" ]]; then
