@@ -15,16 +15,17 @@ LOG_DIR="${REPO_ROOT}/logs/orchestration/${BATCH_ID}"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--mode normal|steered|both] [--scenario FILE] [--dt SECONDS] [--inference-method NAME]
+Usage: $(basename "$0") [--mode normal|steered|no-velocity|both|ablation] [--scenario FILE] [--dt SECONDS] [--inference-method NAME]
 
-Run the normal experiment, the steered experiment, or both sequentially.
+Run one experiment mode, both existing modes, or an ablation of normal,
+steered, and steered without velocity compensation.
 EOF
 }
 
 while (( $# > 0 )); do
   case "$1" in
     --mode)
-      (( $# >= 2 )) || { echo "--mode requires one of: normal, steered, both." >&2; usage >&2; exit 2; }
+      (( $# >= 2 )) || { echo "--mode requires one of: normal, steered, no-velocity, both, ablation." >&2; usage >&2; exit 2; }
       MODE="$2"
       shift 2
       ;;
@@ -52,8 +53,8 @@ while (( $# > 0 )); do
   esac
 done
 
-[[ "${MODE}" == "normal" || "${MODE}" == "steered" || "${MODE}" == "both" ]] || {
-  echo "Invalid mode '${MODE}'; expected normal, steered, or both." >&2
+[[ "${MODE}" == "normal" || "${MODE}" == "steered" || "${MODE}" == "no-velocity" || "${MODE}" == "both" || "${MODE}" == "ablation" ]] || {
+  echo "Invalid mode '${MODE}'; expected normal, steered, no-velocity, both, or ablation." >&2
   exit 2
 }
 [[ "${SCENARIO}" =~ ^[A-Za-z0-9_./-]+\.yaml$ ]] || { echo "Invalid relative YAML scenario path." >&2; exit 2; }
@@ -133,7 +134,7 @@ run_mode() {
   wait_until_ready "${mode}" "${session}"
 
   active_remote_job="${run_id}"
-  remote_command="set -o pipefail; ssh -o BatchMode=yes -o ConnectTimeout=10 ${REMOTE_HOST} 'cd ${REMOTE_REPO} && DISPLAY=${REMOTE_DISPLAY} ./run_sim.bash --scenario ${SCENARIO} --job-id ${run_id} -- --run_id ${run_id} --experiment_mode ${mode} --inference_method ${INFERENCE_METHOD}' 2>&1 | tee ${LOG_DIR}/${mode}.log; status=\${PIPESTATUS[0]}; echo \${status} > ${status_file}; exit \${status}"
+  remote_command="set -o pipefail; ssh -o BatchMode=yes -o ConnectTimeout=10 ${REMOTE_HOST} 'cd ${REMOTE_REPO} && DISPLAY=${REMOTE_DISPLAY} ./run_sim.bash --scenario ${SCENARIO} --job-id ${run_id} --inference-method ${INFERENCE_METHOD} -- --run_id ${run_id} --experiment_mode ${mode}' 2>&1 | tee ${LOG_DIR}/${mode}.log; status=\${PIPESTATUS[0]}; echo \${status} > ${status_file}; exit \${status}"
   remote_pane="$(tmux split-window -v -P -F '#{pane_id}' -t "${session}:0" -c "${REPO_ROOT}" /bin/bash -lc "${remote_command}")"
   tmux select-pane -t "${remote_pane}" -T "Isaac ${mode} status"
   tmux select-layout -t "${session}:0" tiled
@@ -169,11 +170,22 @@ echo "Controller dt: ${CONTROLLER_DT}s"
 ssh -o BatchMode=yes -o ConnectTimeout=10 "${REMOTE_HOST}" \
   "cd ${REMOTE_REPO} && DISPLAY=${REMOTE_DISPLAY} ./run_sim.bash --check --scenario ${SCENARIO}"
 
-if [[ "${MODE}" == "normal" || "${MODE}" == "both" ]]; then
+if [[ "${MODE}" == "normal" || "${MODE}" == "both" || "${MODE}" == "ablation" ]]; then
   run_mode normal
 fi
-if [[ "${MODE}" == "steered" || "${MODE}" == "both" ]]; then
+if [[ "${MODE}" == "steered" || "${MODE}" == "both" || "${MODE}" == "ablation" ]]; then
   run_mode steered
 fi
+if [[ "${MODE}" == "no-velocity" || "${MODE}" == "ablation" ]]; then
+  run_mode no-velocity
+fi
 
-echo "Requested OmniVLA experiment mode '${MODE}' completed. Logs: ${LOG_DIR}"
+echo "Requested OmniVLA experiment mode '${MODE}' completed."
+if [[ "${MODE}" == "ablation" ]]; then
+  echo "Remote run IDs: ${BATCH_ID}_normal, ${BATCH_ID}_steered, ${BATCH_ID}_no-velocity"
+elif [[ "${MODE}" == "both" ]]; then
+  echo "Remote run IDs: ${BATCH_ID}_normal, ${BATCH_ID}_steered"
+else
+  echo "Remote run ID: ${BATCH_ID}_${MODE}"
+fi
+echo "Logs: ${LOG_DIR}"

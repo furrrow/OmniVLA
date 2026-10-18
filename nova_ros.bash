@@ -12,7 +12,7 @@ SESSION_NAME=""
 CONTROLLER_DT="0.75"
 LOG_ROOT="${NOVA_ROS_LOG_ROOT:-${REPO_ROOT}/logs/nova_ros}"
 
-if [[ $# -gt 0 && ( "$1" == "normal" || "$1" == "steered" ) ]]; then
+if [[ $# -gt 0 && ( "$1" == "normal" || "$1" == "steered" || "$1" == "no-velocity" ) ]]; then
   MODE="$1"
   shift
 fi
@@ -34,12 +34,12 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help)
-      echo "Usage: $0 [normal|steered] [--detach] [--session-name NAME] [--dt SECONDS]"
+      echo "Usage: $0 [normal|steered|no-velocity] [--detach] [--session-name NAME] [--dt SECONDS]"
       exit 0
       ;;
     *)
       echo "Unknown argument: $1" >&2
-      echo "Usage: $0 [normal|steered] [--detach] [--session-name NAME] [--dt SECONDS]" >&2
+      echo "Usage: $0 [normal|steered|no-velocity] [--detach] [--session-name NAME] [--dt SECONDS]" >&2
       exit 2
       ;;
   esac
@@ -61,7 +61,7 @@ echo "Controller dt: ${CONTROLLER_DT}s"
 [[ -f "${ROS_SETUP}" ]] || { echo "ROS setup not found: ${ROS_SETUP}" >&2; exit 1; }
 [[ -f "${ROBOT_CONFIG}" ]] || { echo "Robot config not found: ${ROBOT_CONFIG}" >&2; exit 1; }
 command -v tmux >/dev/null 2>&1 || { echo "tmux is not installed or not on PATH." >&2; exit 1; }
-if [[ "${MODE}" == "steered" && ! -f "${STEERNAV_ROOT}/steernav/ros_inference.py" ]]; then
+if [[ "${MODE}" != "normal" && ! -f "${STEERNAV_ROOT}/steernav/ros_inference.py" ]]; then
   echo "Set STEERNAV_ROOT to a SteerNav checkout." >&2
   exit 1
 fi
@@ -103,12 +103,16 @@ run_in_pane "${inference_pane}" "${inference_log}" \
   "source ${ROS_SETUP} && export ROS_DOMAIN_ID=${ROS_DOMAIN_ID} && uv run python inference/omnivla_ros.py --robot sim_nova --config ${ROBOT_CONFIG} ${inference_flags} --ros-args -p use_sim_time:=true"
 
 controller_flags="--simulation-episode-control"
-if [[ "${MODE}" == "steered" ]]; then
+if [[ "${MODE}" != "normal" ]]; then
   controller_flags="--steer ${controller_flags}"
+  steernav_flags="--debug-motion"
+  if [[ "${MODE}" == "no-velocity" ]]; then
+    steernav_flags="${steernav_flags} --no-velocity"
+  fi
   steernav_pane="$(tmux split-window -v -P -F '#{pane_id}' -t "${controller_pane}" -c "${STEERNAV_ROOT}")"
   tmux select-pane -t "${steernav_pane}" -T "SteerNav"
   run_in_pane "${steernav_pane}" "${steernav_log}" \
-    "source ${ROS_SETUP} && export ROS_DOMAIN_ID=${ROS_DOMAIN_ID} && uv run steernav/ros_inference.py --robot sim_nova --debug-motion --ros-args -p use_sim_time:=true"
+    "source ${ROS_SETUP} && export ROS_DOMAIN_ID=${ROS_DOMAIN_ID} && uv run steernav/ros_inference.py --robot sim_nova ${steernav_flags} --ros-args -p use_sim_time:=true"
   tmux select-layout -t "${session_name}:0" tiled
 fi
 
