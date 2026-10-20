@@ -8,14 +8,17 @@ REMOTE_DISPLAY="${REMOTE_DISPLAY:-:1}"
 SCENARIO="DynaNav/configs/icra_scenarios_v4/scenario3_5.yaml"
 MODE="ablation"
 CONTROLLER_DT="0.75"
+TIME_LOOK_AHEAD="1.0"
+FIX_END=false
 INFERENCE_METHOD="${INFERENCE_METHOD:-OmniVLA}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-600}"
 BATCH_ID="${BATCH_ID:-$(date +%Y%m%d_%H%M%S)}"
 LOG_DIR="${REPO_ROOT}/logs/orchestration/${BATCH_ID}"
+RUN_ATTEMPT_ID="${RUN_ATTEMPT_ID:-$(date +%Y%m%d_%H%M%S)_$$}"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--mode normal|steered|no-velocity|both|ablation] [--scenario FILE] [--dt SECONDS] [--inference-method NAME]
+Usage: $(basename "$0") [--mode normal|steered|no-velocity|both|ablation] [--scenario FILE] [--dt SECONDS] [--inference-method NAME] [--time-look-ahead SECONDS] [--fix-end|--no-fix-end]
 
 Run one experiment mode, both existing modes, or an ablation of normal,
 steered, and steered without velocity compensation.
@@ -48,6 +51,14 @@ while (( $# > 0 )); do
       shift 2
       ;;
     --inference-method=*) INFERENCE_METHOD="${1#*=}"; shift ;;
+    --time-look-ahead)
+      (( $# >= 2 )) || { echo "--time-look-ahead requires a value." >&2; usage >&2; exit 2; }
+      TIME_LOOK_AHEAD="$2"
+      shift 2
+      ;;
+    --time-look-ahead=*) TIME_LOOK_AHEAD="${1#*=}"; shift ;;
+    --fix-end) FIX_END=true; shift ;;
+    --no-fix-end) FIX_END=false; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -61,6 +72,7 @@ done
 [[ "${REMOTE_REPO}" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo "Invalid REMOTE_REPO." >&2; exit 2; }
 [[ "${REMOTE_DISPLAY}" =~ ^:[0-9]+(\.[0-9]+)?$ ]] || { echo "Invalid REMOTE_DISPLAY." >&2; exit 2; }
 [[ "${BATCH_ID}" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "Invalid BATCH_ID." >&2; exit 2; }
+[[ "${RUN_ATTEMPT_ID}" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "Invalid RUN_ATTEMPT_ID." >&2; exit 2; }
 [[ "${INFERENCE_METHOD}" =~ ^[A-Za-z0-9_.-]+$ ]] || {
   echo "Inference method may contain only letters, numbers, dots, underscores, and hyphens." >&2
   exit 2
@@ -73,10 +85,12 @@ done
   echo "READY_TIMEOUT_SECONDS must be a positive integer." >&2
   exit 2
 }
+[[ "${TIME_LOOK_AHEAD}" =~ ^[0-9]+([.][0-9]+)?$ ]] || {
+  echo "SteerNav time look-ahead must be a non-negative number of seconds." >&2
+  exit 2
+}
 command -v tmux >/dev/null 2>&1 || { echo "tmux is not installed." >&2; exit 1; }
 
-display_number="${REMOTE_DISPLAY#:}"
-display_number="${display_number%%.*}"
 mkdir -p "${LOG_DIR}"
 active_session=""
 active_remote_job=""
@@ -95,6 +109,7 @@ stop_remote_job() {
 cleanup_session() {
   stop_remote_job
   if [[ -n "${active_session}" ]] && tmux has-session -t "${active_session}" 2>/dev/null; then
+    echo "Stopping local tmux session ${active_session}"
     tmux kill-session -t "${active_session}"
   fi
   active_session=""
@@ -104,9 +119,12 @@ trap 'exit 130' INT TERM
 
 wait_until_ready() {
   local mode="$1" session="$2" deadline=$((SECONDS + READY_TIMEOUT_SECONDS)) pane_output pane_id
-  echo "Waiting up to ${READY_TIMEOUT_SECONDS}s for local ${mode} nodes..."
+  echo "Waiting up to ${READY_TIMEOUT_SECONDS}s for local ${mode} nodes to initialize..."
   while (( SECONDS < deadline )); do
-    tmux has-session -t "${session}" 2>/dev/null || return 1
+    if ! tmux has-session -t "${session}" 2>/dev/null; then
+      echo "Local tmux session exited before becoming ready: ${session}" >&2
+      return 1
+    fi
     pane_output=""
     while IFS= read -r pane_id; do
       pane_output+="$(tmux capture-pane -p -S -200 -t "${pane_id}" 2>/dev/null || true)"
@@ -120,6 +138,7 @@ wait_until_ready() {
     fi
     sleep 2
   done
+  echo "Timed out waiting for local ${mode} pipeline. Recent pane output:" >&2
   while IFS= read -r pane_id; do
     tmux capture-pane -p -S -100 -t "${pane_id}" >&2 || true
   done < <(tmux list-panes -t "${session}:0" -F '#{pane_id}')
@@ -127,14 +146,27 @@ wait_until_ready() {
 }
 
 run_mode() {
-  local mode="$1" run_id="${BATCH_ID}_$1" session="omnivla_${BATCH_ID}_$1"
-  local status_file="${LOG_DIR}/.${mode}.$$.status" remote_command remote_pane watcher_pid remote_status
+  local mode="$1" run_id="${BATCH_ID}_$1"
+  local session="omnivla_${BATCH_ID//./_}_${1}_${RUN_ATTEMPT_ID//./_}"
+  local run_log_dir="${LOG_DIR}/${run_id}/${RUN_ATTEMPT_ID}"
+  local status_file="${run_log_dir}/.remote.status" remote_command remote_pane watcher_pid remote_status
+  echo
+  echo "=== ${mode}: run_id=${run_id} ==="
+  mkdir -p "${run_log_dir}"
+  local nova_ros_args=("${mode}" --detach --session-name "${session}" --dt "${CONTROLLER_DT}" --time-look-ahead "${TIME_LOOK_AHEAD}")
+  if [[ "${FIX_END}" == true ]]; then
+    nova_ros_args+=(--fix-end)
+  else
+    nova_ros_args+=(--no-fix-end)
+  fi
+  NOVA_ROS_LOG_ROOT="${run_log_dir}" \
+    "${REPO_ROOT}/nova_ros.bash" "${nova_ros_args[@]}"
   active_session="${session}"
-  "${REPO_ROOT}/nova_ros.bash" "${mode}" --detach --session-name "${session}" --dt "${CONTROLLER_DT}"
   wait_until_ready "${mode}" "${session}"
 
+  echo "Starting simulator benchmark on ${REMOTE_HOST} in a visible tmux pane..."
   active_remote_job="${run_id}"
-  remote_command="set -o pipefail; ssh -o BatchMode=yes -o ConnectTimeout=10 ${REMOTE_HOST} 'cd ${REMOTE_REPO} && DISPLAY=${REMOTE_DISPLAY} ./run_sim.bash --scenario ${SCENARIO} --job-id ${run_id} --inference-method ${INFERENCE_METHOD} -- --run_id ${run_id} --experiment_mode ${mode}' 2>&1 | tee ${LOG_DIR}/${mode}.log; status=\${PIPESTATUS[0]}; echo \${status} > ${status_file}; exit \${status}"
+  remote_command="set -o pipefail; ssh -o BatchMode=yes -o ConnectTimeout=10 ${REMOTE_HOST} 'cd ${REMOTE_REPO} && DISPLAY=${REMOTE_DISPLAY} ./run_sim.bash --scenario ${SCENARIO} --job-id ${run_id} --inference-method ${INFERENCE_METHOD} -- --run_id ${run_id} --experiment_mode ${mode}' 2>&1 | tee ${run_log_dir}/remote.log; status=\${PIPESTATUS[0]}; echo \${status} > ${status_file}; exit \${status}"
   remote_pane="$(tmux split-window -v -P -F '#{pane_id}' -t "${session}:0" -c "${REPO_ROOT}" /bin/bash -lc "${remote_command}")"
   tmux select-pane -t "${remote_pane}" -T "Isaac ${mode} status"
   tmux select-layout -t "${session}:0" tiled
@@ -145,8 +177,9 @@ run_mode() {
   ) &
   watcher_pid=$!
 
+  echo "Attaching to ${session}; it will close shortly after the remote benchmark exits."
   if [[ -n "${TMUX:-}" ]]; then
-    echo "Run this script outside an existing tmux client." >&2
+    echo "Run this orchestrator outside an existing tmux client so it can display its experiment session." >&2
     tmux kill-session -t "${session}"
     wait "${watcher_pid}" || true
     return 1
@@ -154,44 +187,45 @@ run_mode() {
   tmux attach-session -t "${session}" || true
   wait "${watcher_pid}" || true
   active_session=""
-  [[ -s "${status_file}" ]] || { echo "Remote benchmark did not report status." >&2; return 1; }
+  if [[ ! -s "${status_file}" ]]; then
+    echo "The ${mode} tmux session ended before the remote benchmark reported status." >&2
+    return 1
+  fi
   remote_status="$(<"${status_file}")"
   active_remote_job=""
-  [[ "${remote_status}" == "0" ]] || return "${remote_status}"
+  if [[ "${remote_status}" != "0" ]]; then
+    echo "Remote ${mode} benchmark failed with status ${remote_status}." >&2
+    return "${remote_status}"
+  fi
+  echo "Remote ${mode} benchmark completed."
   sleep 5
 }
 
 echo "Batch ID: ${BATCH_ID}"
+echo "Run attempt: ${RUN_ATTEMPT_ID}"
 echo "Mode: ${MODE}"
 echo "Inference method: ${INFERENCE_METHOD}"
+echo "SteerNav time look-ahead: ${TIME_LOOK_AHEAD}s"
+echo "SteerNav fix end: ${FIX_END}"
 echo "Scenario: ${SCENARIO}"
-echo "Remote simulator: ${REMOTE_HOST}:${REMOTE_REPO}"
+echo "Remote: ${REMOTE_HOST}:${REMOTE_REPO} (DISPLAY=${REMOTE_DISPLAY})"
 echo "Controller dt: ${CONTROLLER_DT}s"
+echo "Local logs: ${LOG_DIR}"
 ssh -o BatchMode=yes -o ConnectTimeout=10 "${REMOTE_HOST}" \
   "cd ${REMOTE_REPO} && DISPLAY=${REMOTE_DISPLAY} ./run_sim.bash --check --scenario ${SCENARIO}"
 
-case "${MODE}" in
-  normal)
-    run_mode normal
-    ;;
-  steered)
-    run_mode steered
-    ;;
-  no-velocity)
-    run_mode no-velocity
-    ;;
-  both)
-    run_mode normal
-    run_mode steered
-    ;;
-  ablation)
-    run_mode normal
-    run_mode steered
-    run_mode no-velocity
-    ;;
-esac
+if [[ "${MODE}" == "steered" || "${MODE}" == "both" || "${MODE}" == "ablation" ]]; then
+  run_mode steered
+fi
+if [[ "${MODE}" == "no-velocity" || "${MODE}" == "ablation" ]]; then
+  run_mode no-velocity
+fi
+if [[ "${MODE}" == "normal" || "${MODE}" == "both" || "${MODE}" == "ablation" ]]; then
+  run_mode normal
+fi
 
-echo "Requested OmniVLA experiment mode '${MODE}' completed."
+echo
+echo "Requested OmniVLA experiment mode '${MODE}' completed successfully."
 if [[ "${MODE}" == "ablation" ]]; then
   echo "Remote run IDs: ${BATCH_ID}_normal, ${BATCH_ID}_steered, ${BATCH_ID}_no-velocity"
 elif [[ "${MODE}" == "both" ]]; then
@@ -199,4 +233,4 @@ elif [[ "${MODE}" == "both" ]]; then
 else
   echo "Remote run ID: ${BATCH_ID}_${MODE}"
 fi
-echo "Logs: ${LOG_DIR}"
+echo "Local orchestration logs: ${LOG_DIR}"
